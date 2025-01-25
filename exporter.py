@@ -86,6 +86,65 @@ def get_at_cursor(url, params, cursor=None, response_url=None):
 
     try:
         if d["ok"] is False:
+            if d.get("error") in ["not_in_channel", "is_archived"]:
+                # Try joining/unarchiving the channel if it's a channel history request
+                if "conversations.history" in url and "channel" in params:
+                    channel_id = params["channel"]
+                    was_archived = False
+                    
+                    # Check if channel is archived
+                    info_response = requests.get(
+                        "https://slack.com/api/conversations.info",
+                        headers=HEADERS,
+                        params={"channel": channel_id}
+                    ).json()
+                    
+                    if info_response.get("ok") and info_response.get("channel", {}).get("is_archived"):
+                        was_archived = True
+                    
+                    # Try joining the channel first
+                    try:
+                        join_response = requests.post(
+                            "https://slack.com/api/conversations.join",
+                            headers=HEADERS,
+                            json={"channel": channel_id}
+                        ).json()
+                        
+                        if join_response.get("ok"):
+                            # Now try unarchiving if needed
+                            if was_archived:
+                                unarchive_response = requests.post(
+                                    "https://slack.com/api/conversations.unarchive",
+                                    headers=HEADERS,
+                                    json={"channel": channel_id}
+                                ).json()
+                                if not unarchive_response.get("ok"):
+                                    print(f"Could not unarchive channel {channel_id}: {unarchive_response.get('error')}. "
+                                          f"The 'channels:manage' scope is required in your SLACK_USER_TOKEN to unarchive channels. "
+                                          f"Visit https://api.slack.com/apps to add this scope to your app.")
+                                    return None, {"messages": []}  # Skip if we can't unarchive
+                            
+                            # Get the history
+                            result = get_at_cursor(url, params, cursor, response_url)
+                            
+                            # Re-archive if it was archived before
+                            if was_archived:
+                                archive_response = requests.post(
+                                    "https://slack.com/api/conversations.archive",
+                                    headers=HEADERS,
+                                    json={"channel": channel_id}
+                                ).json()
+                                if not archive_response.get("ok"):
+                                    print(f"Could not re-archive channel {channel_id}: {archive_response.get('error')}")
+                            
+                            return result
+                        else:
+                            print(f"Could not join channel {channel_id}: {join_response.get('error')}")
+                    except Exception as e:
+                        print(f"Error joining channel {channel_id}: {e}")
+                
+                return None, {"messages": []}  # Return empty messages list if we can't access
+                
             handle_print("I encountered an error: %s" % d, response_url)
             sys.exit(1)
 
